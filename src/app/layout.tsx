@@ -1,7 +1,16 @@
 import type { Metadata } from "next";
+import { Manrope } from "next/font/google";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import NextTopLoader from "nextjs-toploader";
+import { cn } from "@/lib/utils"; // Assuming you have a cn utility for conditional class names
+
+// Configure Manrope font
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-manrope",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Focus Flow",
@@ -15,7 +24,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>
+      <body className={cn(manrope.variable, "bg-background text-foreground")}>
         <ClerkProvider
           appearance={{
             baseTheme: "simple",
@@ -23,8 +32,7 @@ export default function RootLayout({
           }}
         >
           <NextTopLoader color="#5477BE" showSpinner={false} />
-
-          <body>{children}</body>
+          {children}
         </ClerkProvider>
       </body>
     </html>
