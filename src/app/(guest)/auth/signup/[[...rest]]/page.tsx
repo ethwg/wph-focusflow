@@ -14,7 +14,7 @@ export default function SignupPage() {
   }, []);
 
   return (
-    <div className="min-h-screen flex bg-gradient-to-br from-muted via-[#5477BE] to-[#002E4E]">
+    <div className="min-h-screen flex bg-gradient-to-br from-muted via-[#5477BE] to-[#002E4E] overflow-hidden">
       {/* Left Side - Branding (Static) */}
       <div className="hidden lg:flex lg:w-1/2 items-center justify-center p-12">
         <div className="text-center space-y-4">
