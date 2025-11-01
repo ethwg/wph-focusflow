@@ -222,3 +222,4 @@ class Notification(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     user = relationship("UserAccount", backref="notifications")
+
