@@ -4,6 +4,7 @@ import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import NextTopLoader from "nextjs-toploader";
 import { cn } from "@/lib/utils"; // Assuming you have a cn utility for conditional class names
+import { Toaster } from "sonner";
 
 // Configure Manrope font
 const manrope = Manrope({
@@ -33,6 +34,7 @@ export default function RootLayout({
         >
           <NextTopLoader color="#5477BE" showSpinner={false} />
           {children}
+          <Toaster position="bottom-right" richColors />
         </ClerkProvider>
       </body>
     </html>
