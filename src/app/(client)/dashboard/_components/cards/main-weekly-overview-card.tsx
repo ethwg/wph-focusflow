@@ -4,7 +4,7 @@ import { Calendar } from "lucide-react";
 
 export function MainWeeklyOverviewCard() {
   return (
-    <Card className="pb-3">
+    <Card className="pb-3 flex h-full">
       <CardHeader>
         <CardTitle className="text-muted-foreground flex items-center text-lg">
           <Calendar className="h-5 w-5 mr-2" /> Weekly Overview

@@ -117,7 +117,7 @@ export function SideTodayActionLogCard() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="space-y-3">
+        <div className="space-y-3 max-h-[290px] overflow-y-auto">
           {data.actions.map((action) => (
             <div
               key={action.logId}

@@ -21,43 +21,70 @@ interface CurrentUser {
   user_id: number;
   team_id: number | null;
 }
-
 interface Team {
   manager_id: number | null;
   name: string;
 }
-
 interface TeamMember {
   user_id: number;
   name: string;
 }
 
-interface NestedUser {
-  name?: string;
-}
-
 interface WeeklyReport {
   report_id: number;
   user_id: number;
-  week_start: string;
-  total_actions: number | null;
+  week_start: string; // DATE (YYYY-MM-DD)
+  total_actions: number | null; // <-- use this
   total_minutes: number | null;
   project_time: Record<string, number> | null;
   daily_stats: Record<string, unknown> | null;
   published: boolean;
   created_at: string;
-  user: NestedUser | NestedUser[] | null;
 }
 
 // ---------- Helpers ----------
-function mondayOf(date = new Date()) {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 Sun..6 Sat
-  const diff = day === 0 ? -6 : 1 - day; // shift to Monday
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
+const TZ = "Australia/Melbourne";
+
+function melDateOnly(date: Date) {
+  const yyyy = new Intl.DateTimeFormat("en", {
+    timeZone: TZ,
+    year: "numeric",
+  }).format(date);
+  const mm = new Intl.DateTimeFormat("en", {
+    timeZone: TZ,
+    month: "2-digit",
+  }).format(date);
+  const dd = new Intl.DateTimeFormat("en", {
+    timeZone: TZ,
+    day: "2-digit",
+  }).format(date);
+  return `${yyyy}-${mm}-${dd}`; // YYYY-MM-DD in Melbourne
 }
+
+function mondayOfMel(date = new Date()) {
+  // Compute Monday using Melbourne-local weekday
+  const d = new Date(date);
+  // Make a Melbourne-local date by stripping to YYYY-MM-DD in Melbourne
+  const local = new Date(`${melDateOnly(d)}T00:00:00`);
+  const weekday = new Intl.DateTimeFormat("en", {
+    timeZone: TZ,
+    weekday: "short",
+  }).format(local); // Mon..Sun (string)
+  const map: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
+  const w = map[weekday.slice(0, 3)] ?? 0;
+  const monday = new Date(local);
+  monday.setDate(local.getDate() - w);
+  return monday; // local-midnight-ish ISO
+}
+
 function addDays(d: Date, n: number) {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
@@ -67,17 +94,15 @@ function addDays(d: Date, n: number) {
 // ---------- Route ----------
 export async function GET(request: Request) {
   try {
-    const authContext = await getAuthContext();
-    if (!authContext) {
+    const auth = await getAuthContext();
+    if (!auth)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
 
     const { searchParams } = new URL(request.url);
-
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const pageSize = Math.min(
       50,
-      Math.max(1, parseInt(searchParams.get("pageSize") || "10")),
+      Math.max(1, parseInt(searchParams.get("pageSize") || "10", 10)),
     );
     const q = (searchParams.get("q") || "").trim();
     const weekPreset = (searchParams.get("weekPreset") || "this") as WeekPreset;
@@ -87,217 +112,247 @@ export async function GET(request: Request) {
       | "userName";
     const sortDir = (searchParams.get("sortDir") || "desc") as "asc" | "desc";
 
-    // Current user -> team & manager check
-    const { data: currentUser, error: userError } = await supabaseAdmin
+    // Caller -> team & manager check
+    const { data: meRaw, error: meErr } = await supabaseAdmin
       .from("user_account")
       .select("user_id, team_id")
-      .eq("clerk_id", authContext.userId)
+      .eq("clerk_id", auth.userId)
+      .is("deleted_at", null)
       .single();
 
-    const typedCurrentUser = currentUser as CurrentUser | null;
-
-    if (userError || !typedCurrentUser) {
+    const me = meRaw as CurrentUser | null;
+    if (meErr || !me)
       return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-    if (!typedCurrentUser.team_id) {
+    if (!me.team_id)
       return NextResponse.json(
         { error: "User is not part of any team" },
         { status: 403 },
       );
-    }
 
-    const { data: team, error: teamError } = await supabaseAdmin
+    const { data: teamRaw, error: teamErr } = await supabaseAdmin
       .from("team")
       .select("manager_id, name")
-      .eq("team_id", typedCurrentUser.team_id)
+      .eq("team_id", me.team_id)
       .single();
 
-    const typedTeam = team as Team | null;
-
-    if (teamError || !typedTeam) {
+    const team = teamRaw as Team | null;
+    if (teamErr || !team)
       return NextResponse.json({ error: "Team not found" }, { status: 404 });
-    }
-    if (typedTeam.manager_id !== typedCurrentUser.user_id) {
+    if (team.manager_id !== me.user_id) {
       return NextResponse.json(
         { error: "Access denied. Manager privileges required." },
         { status: 403 },
       );
     }
 
-    // Team members
-    const { data: teamMembers, error: membersError } = await supabaseAdmin
+    // Team members (active)
+    const { data: membersRaw, error: membersErr } = await supabaseAdmin
       .from("user_account")
       .select("user_id, name")
-      .eq("team_id", typedCurrentUser.team_id)
+      .eq("team_id", me.team_id)
       .is("deleted_at", null);
 
-    if (membersError) {
+    if (membersErr)
       return NextResponse.json(
         { error: "Failed to fetch team members" },
         { status: 500 },
       );
-    }
 
-    const typedTeamMembers = (teamMembers as TeamMember[]) ?? [];
-    const teamMemberIds = typedTeamMembers.map((m) => m.user_id);
-
-    if (teamMemberIds.length === 0) {
+    const members = (membersRaw as TeamMember[]) ?? [];
+    if (members.length === 0)
       return NextResponse.json(
         { rows: [], total: 0, page, pageSize },
         { status: 200 },
       );
-    }
 
-    // Week filters
-    const nowMon = mondayOf(new Date());
-    let startBound: Date | null = null;
-    let endBound: Date | null = null;
+    const memberIds = members.map((m) => m.user_id);
+    const nameById = new Map<number, string>(
+      members.map((m) => [m.user_id, m.name]),
+    );
+
+    // Week filters (Melbourne)
+    const baseMonday = mondayOfMel(new Date());
+    let startBound: string | null = null;
+    let endBound: string | null = null;
 
     if (weekPreset === "this") {
-      startBound = nowMon;
-      endBound = addDays(nowMon, 6);
+      startBound = melDateOnly(baseMonday);
+      endBound = melDateOnly(addDays(baseMonday, 6));
     } else if (weekPreset === "last") {
-      startBound = addDays(nowMon, -7);
-      endBound = addDays(nowMon, -1);
+      const lastMon = addDays(baseMonday, -7);
+      startBound = melDateOnly(lastMon);
+      endBound = melDateOnly(addDays(lastMon, 6));
     } else if (weekPreset === "last4") {
-      startBound = addDays(nowMon, -28);
-      endBound = addDays(nowMon, 6);
+      const fourAgo = addDays(baseMonday, -28);
+      startBound = melDateOnly(fourAgo);
+      endBound = melDateOnly(addDays(baseMonday, 6));
     }
-    // "all" => no bounds
 
-    // Base query: published weekly reports for team users
+    // Build base query: published weekly reports for team
+    // We’ll page at DB when sorting by created_at/total_actions; for userName we’ll sort in-memory.
     let base = supabaseAdmin
       .from("weekly_report")
       .select(
         `
-        report_id,
-        user_id,
-        week_start,
-        total_actions,
-        total_minutes,
-        project_time,
-        daily_stats,
-        published,
-        created_at,
-        user:user_id ( name )
-      `,
+          report_id,
+          user_id,
+          week_start,
+          total_actions,
+          total_minutes,
+          project_time,
+          daily_stats,
+          published,
+          created_at
+        `,
         { count: "exact" },
       )
-      .in("user_id", teamMemberIds)
+      .in("user_id", memberIds)
       .eq("published", true);
 
     if (startBound && endBound) {
-      base = base
-        .gte("week_start", startBound.toISOString().slice(0, 10))
-        .lte("week_start", endBound.toISOString().slice(0, 10));
+      base = base.gte("week_start", startBound).lte("week_start", endBound);
     }
 
-    // We'll over-fetch within a safe cap, then filter/sort/paginate in memory
-    const { data: reports, error: rptError } = await base
-      .order("created_at", { ascending: false })
-      .limit(2000);
+    // Search: name or snippet-like fields (we don't have ai_summary on weekly_report here)
+    // We'll fetch more then filter in memory when q is present.
+    // Sorting: for publishedAt/usefulActions we can order in DB; for userName we do in memory.
+    const canDbOrder = sortBy !== "userName";
+    if (canDbOrder) {
+      if (sortBy === "publishedAt")
+        base = base.order("created_at", { ascending: sortDir === "asc" });
+      if (sortBy === "usefulActions")
+        base = base.order("total_actions", { ascending: sortDir === "asc" });
+      // DB pagination
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
+      const {
+        data: reportsRaw,
+        error: rptErr,
+        count,
+      } = await base.range(from, to);
+      if (rptErr)
+        return NextResponse.json(
+          { error: "Failed to fetch reports" },
+          { status: 500 },
+        );
 
-    if (rptError) {
+      const reports = (reportsRaw as WeeklyReport[]) ?? [];
+      const rows: FeedRow[] = reports.map((r) => {
+        const wsIso = `${r.week_start}T00:00:00.000Z`;
+        const weIso = `${melDateOnly(addDays(new Date(`${r.week_start}T00:00:00`), 6))}T23:59:59.999Z`;
+
+        // Build a tiny summary snippet from project_time/daily_stats if present
+        let snippet: string | null = null;
+        try {
+          if (r.project_time && Object.keys(r.project_time).length) {
+            const top = Object.entries(r.project_time)
+              .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+              .slice(0, 3)
+              .map(([k, v]) => `${k}: ${Math.round((v ?? 0) / 60)}h`)
+              .join(", ");
+            if (top) snippet = `Focus: ${top}`;
+          } else if (r.daily_stats) {
+            const text = JSON.stringify(r.daily_stats);
+            const cleaned = text.replace(/["{}]/g, "");
+            snippet = cleaned.slice(0, 140) || null;
+          }
+        } catch {
+          /* ignore */
+        }
+
+        return {
+          reportId: r.report_id,
+          userId: r.user_id,
+          userName: nameById.get(r.user_id) ?? "Unknown",
+          weekStart: wsIso,
+          weekEnd: weIso,
+          publishedAt: new Date(r.created_at).toISOString(),
+          usefulActions: r.total_actions ?? 0, // <-- avoid N+1; uses weekly_report.total_actions
+          summarySnippet: snippet,
+        };
+      });
+
+      // In-memory search on q (name + snippet)
+      const qLower = q.toLowerCase();
+      const filtered = q
+        ? rows.filter(
+            (r) =>
+              r.userName.toLowerCase().includes(qLower) ||
+              (r.summarySnippet ?? "").toLowerCase().includes(qLower),
+          )
+        : rows;
+
+      return NextResponse.json(
+        { rows: filtered, total: count ?? filtered.length, page, pageSize },
+        { status: 200 },
+      );
+    }
+
+    // Fallback: userName sort → fetch a reasonable window, filter & sort in-memory
+    const { data: allRaw, error: allErr } = await base.limit(2000);
+    if (allErr)
       return NextResponse.json(
         { error: "Failed to fetch reports" },
         { status: 500 },
       );
-    }
 
-    const typedReports = (reports as WeeklyReport[]) || [];
+    const reports = (allRaw as WeeklyReport[]) ?? [];
+    let rows: FeedRow[] = reports.map((r) => {
+      const wsIso = `${r.week_start}T00:00:00.000Z`;
+      const weIso = `${melDateOnly(addDays(new Date(`${r.week_start}T00:00:00`), 6))}T23:59:59.999Z`;
 
-    // Build name map
-    const memberNameMap = new Map<number, string>();
-    typedTeamMembers.forEach((m) => memberNameMap.set(m.user_id, m.name));
-
-    // Enrich rows
-    const rows: FeedRow[] = [];
-
-    const tasks = typedReports.map(async (r) => {
-      const userId = r.user_id;
-
-      // Supabase nested select can be object or array depending on relationship config
-      const nestedUser = r.user;
-      const nestedName =
-        (nestedUser && typeof nestedUser === "object" && "name" in nestedUser
-          ? nestedUser.name
-          : Array.isArray(nestedUser) && nestedUser[0]?.name) || undefined;
-
-      const userName = memberNameMap.get(userId) || nestedName || "Unknown";
-
-      const ws = new Date(r.week_start);
-      ws.setHours(0, 0, 0, 0);
-      const we = addDays(ws, 6);
-      we.setHours(23, 59, 59, 999);
-
-      // Summary snippet
-      let summarySnippet: string | null = null;
+      let snippet: string | null = null;
       try {
-        const daily = r.daily_stats;
-        if (daily && typeof daily === "object") {
-          const text = JSON.stringify(daily);
-          summarySnippet = text.replace(/["{}]/g, "").slice(0, 140) || null;
-        }
-        if ((!summarySnippet || summarySnippet.length < 8) && r.project_time) {
-          const obj = r.project_time;
-          const top = Object.entries(obj)
+        if (r.project_time && Object.keys(r.project_time).length) {
+          const top = Object.entries(r.project_time)
             .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
             .slice(0, 3)
             .map(([k, v]) => `${k}: ${Math.round((v ?? 0) / 60)}h`)
             .join(", ");
-          if (top) summarySnippet = `Focus: ${top}`;
+          if (top) snippet = `Focus: ${top}`;
+        } else if (r.daily_stats) {
+          const text = JSON.stringify(r.daily_stats);
+          const cleaned = text.replace(/["{}]/g, "");
+          snippet = cleaned.slice(0, 140) || null;
         }
       } catch {
-        // ignore malformed json
+        /* ignore */
       }
 
-      // Useful actions: count activity logs in that week for this user
-      const { count: actionCount } = await supabaseAdmin
-        .from("activity_log")
-        .select("*", { head: true, count: "exact" })
-        .eq("user_id", userId)
-        .gte("event_time", ws.toISOString())
-        .lte("event_time", we.toISOString());
-
-      rows.push({
+      return {
         reportId: r.report_id,
-        userId,
-        userName,
-        weekStart: new Date(r.week_start).toISOString(),
-        weekEnd: addDays(new Date(r.week_start), 6).toISOString(),
+        userId: r.user_id,
+        userName: nameById.get(r.user_id) ?? "Unknown",
+        weekStart: wsIso,
+        weekEnd: weIso,
         publishedAt: new Date(r.created_at).toISOString(),
-        usefulActions: actionCount || 0,
-        summarySnippet,
-      });
+        usefulActions: r.total_actions ?? 0,
+        summarySnippet: snippet,
+      };
     });
 
-    await Promise.all(tasks);
-
-    // Search (user or summary)
+    // Search
     const qLower = q.toLowerCase();
-    const filtered = q
-      ? rows.filter(
-          (r) =>
-            r.userName.toLowerCase().includes(qLower) ||
-            (r.summarySnippet ?? "").toLowerCase().includes(qLower),
-        )
-      : rows;
+    if (q) {
+      rows = rows.filter(
+        (r) =>
+          r.userName.toLowerCase().includes(qLower) ||
+          (r.summarySnippet ?? "").toLowerCase().includes(qLower),
+      );
+    }
 
-    // Sort
-    const sorters: Record<typeof sortBy, (a: FeedRow, b: FeedRow) => number> = {
-      userName: (a, b) => a.userName.localeCompare(b.userName),
-      publishedAt: (a, b) =>
-        new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime(),
-      usefulActions: (a, b) => a.usefulActions - b.usefulActions,
-    };
-    const sorter = sorters[sortBy] ?? sorters.publishedAt;
-    filtered.sort((a, b) => (sortDir === "asc" ? sorter(a, b) : sorter(b, a)));
+    // Sort by userName in memory
+    rows.sort((a, b) =>
+      sortDir === "asc"
+        ? a.userName.localeCompare(b.userName)
+        : b.userName.localeCompare(a.userName),
+    );
 
-    // Pagination
-    const total = filtered.length;
+    // Paginate in memory
+    const total = rows.length;
     const start = (page - 1) * pageSize;
     const end = start + pageSize;
-    const pageRows = filtered.slice(start, end);
+    const pageRows = rows.slice(start, end);
 
     return NextResponse.json(
       { rows: pageRows, total, page, pageSize },
