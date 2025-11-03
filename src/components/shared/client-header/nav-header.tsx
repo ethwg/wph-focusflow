@@ -1,29 +1,49 @@
-// nav-header.tsx
 "use client";
 
+import { useUser } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { NavUser } from "@/components/shared/client-header/nav-user";
+import { Notifications } from "./nav-notification";
+import { useUserProfile } from "@/hooks/useUserProfile";
+import { useIsManager } from "@/hooks/use-is-manager";
+import { Skeleton } from "@/components/ui/skeleton";
 
-const data = {
-  user: {
-    name: "Jane Doe",
-    email: "jane@example.com",
-    avatar: "/avatars/jane.jpg",
-  },
-};
-
-const navItems = [
+const baseNavItems = [
   { label: "Personal Dashboard", href: "/dashboard" },
-  { label: "Team Dashboard", href: "/team" },
-  { label: "Actions Log", href: "/actions" },
+  { label: "Actions Log", href: "/dashboard/actions-log" },
 ];
+
+const managerNavItem = { label: "Team Dashboard", href: "/dashboard/team" };
 
 export function NavHeader() {
   const pathname = usePathname();
+  const { user: clerkUser, isLoaded: isClerkLoaded } = useUser();
+  const { profile, isLoading: isProfileLoading } = useUserProfile();
+  const { isManager, isLoading: isManagerLoading } = useIsManager();
+
+  const isLoading = !isClerkLoaded || isProfileLoading || isManagerLoading;
+
+  // Build navigation items based on manager status
+  const navItems = isManager
+    ? [baseNavItems[0], managerNavItem, baseNavItems[1]]
+    : baseNavItems;
+
+  // Prepare user data for NavUser component
+  const userData = clerkUser
+    ? {
+        name:
+          profile?.name ||
+          `${clerkUser.firstName || ""} ${clerkUser.lastName || ""}`.trim() ||
+          "User",
+        email:
+          profile?.email || clerkUser.emailAddresses[0]?.emailAddress || "",
+        avatar: clerkUser.imageUrl || "/avatars/default.jpg",
+      }
+    : null;
 
   return (
     <motion.header
@@ -46,7 +66,7 @@ export function NavHeader() {
                   className="object-contain"
                 />
               </div>
-              <span className="text-primary text-xl font-semibold  tracking-tight">
+              <span className="text-primary text-xl font-semibold tracking-tight">
                 FOCUS FLOW
               </span>
             </Link>
@@ -89,14 +109,27 @@ export function NavHeader() {
             })}
           </nav>
         </div>
-        {/* Right Section: Tracking Toggle + User Menu */}
+
+        {/* Right Section: Notifications & User Menu */}
         <div className="flex items-center gap-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.3, duration: 0.3 }}
+          >
+            <Notifications />
+          </motion.div>
+
           <motion.div
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.4, duration: 0.3 }}
           >
-            <NavUser user={data.user} />
+            {isLoading ? (
+              <Skeleton className="h-10 w-10 rounded-full" />
+            ) : userData ? (
+              <NavUser user={userData} />
+            ) : null}
           </motion.div>
         </div>
       </div>

@@ -1,0 +1,180 @@
+// src/app/api/admin/users/[userId]/route.ts
+import { NextResponse } from "next/server";
+import { supabaseAdmin } from "@/lib/supabase";
+import { getAuthContext, checkAdmin } from "@/lib/auth-helpers";
+
+interface UserAccount {
+  user_id: number;
+  org_id: number;
+  team_id: number | null;
+  role_id: number | null;
+  email: string;
+  name: string;
+  password_hash: string;
+  timezone: string | null;
+  privacy_settings: Record<string, unknown>;
+  tool_connections: Record<string, unknown>;
+  devices: Record<string, unknown>;
+  tracking_enabled: boolean;
+  last_login: string | null;
+  created_at: string;
+  deleted_at: string | null;
+  clerk_id: string;
+}
+
+interface UpdateUserRequest {
+  user_id?: number;
+  clerk_id?: string;
+  password_hash?: string;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+type RouteContext = { params: Record<string, string> };
+
+// GET - Fetch specific user by ID (admin only)
+export async function GET(_req: Request, context: RouteContext) {
+  try {
+    const authContext = await getAuthContext();
+    if (!authContext || !checkAdmin(authContext)) {
+      return NextResponse.json(
+        { error: "Forbidden - Admin access required" },
+        { status: 403 },
+      );
+    }
+
+    const userIdParam = context.params.userId;
+    const userId = Number(userIdParam);
+    if (!Number.isFinite(userId)) {
+      return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("user_account")
+      .select("*")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .single();
+
+    if (error || !data) {
+      console.error("Supabase error:", error);
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    const typedData = data as UserAccount;
+    return NextResponse.json({ user: typedData }, { status: 200 });
+  } catch (error) {
+    console.error("Error fetching user:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
+  }
+}
+
+// PATCH - Update specific user (admin only)
+export async function PATCH(req: Request, context: RouteContext) {
+  try {
+    const authContext = await getAuthContext();
+    if (!authContext || !checkAdmin(authContext)) {
+      return NextResponse.json(
+        { error: "Forbidden - Admin access required" },
+        { status: 403 },
+      );
+    }
+
+    const body = (await req.json()) as UpdateUserRequest;
+
+    // Prevent updating sensitive/immutable fields
+    const {
+      user_id: _userId,
+      clerk_id: _clerkId,
+      password_hash: _passwordHash,
+      created_at: _createdAt,
+      ...allowedUpdates
+    } = body;
+
+    if (Object.keys(allowedUpdates).length === 0) {
+      return NextResponse.json(
+        { error: "No valid fields to update" },
+        { status: 400 },
+      );
+    }
+
+    const userIdParam = context.params.userId;
+    const userId = Number(userIdParam);
+    if (!Number.isFinite(userId)) {
+      return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("user_account")
+      .update(allowedUpdates)
+      .eq("user_id", userId)
+      .select()
+      .single();
+
+    if (error || !data) {
+      console.error("Supabase error:", error);
+      return NextResponse.json(
+        { error: "Failed to update user" },
+        { status: 400 },
+      );
+    }
+
+    const typedData = data as UserAccount;
+    return NextResponse.json({ user: typedData }, { status: 200 });
+  } catch (error) {
+    console.error("Error updating user:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
+  }
+}
+
+// DELETE - Soft delete user (admin only)
+export async function DELETE(_req: Request, context: RouteContext) {
+  try {
+    const authContext = await getAuthContext();
+    if (!authContext || !checkAdmin(authContext)) {
+      return NextResponse.json(
+        { error: "Forbidden - Admin access required" },
+        { status: 403 },
+      );
+    }
+
+    const userIdParam = context.params.userId;
+    const userId = Number(userIdParam);
+    if (!Number.isFinite(userId)) {
+      return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("user_account")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .select()
+      .single();
+
+    if (error || !data) {
+      console.error("Supabase error:", error);
+      return NextResponse.json(
+        { error: "Failed to delete user" },
+        { status: 400 },
+      );
+    }
+
+    const typedData = data as UserAccount;
+    return NextResponse.json(
+      { message: "User deleted successfully", user: typedData },
+      { status: 200 },
+    );
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
+  }
+}
