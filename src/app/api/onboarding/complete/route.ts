@@ -2,45 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getAuthContext } from "@/lib/auth-helpers";
 
-interface OnboardingRequest {
-  roleId: number;
-  toolIds?: number[];
-  teamId?: number;
-  orgId?: number;
-}
-
-interface UserUpdateData {
-  role_id: number;
-  tool_connections: number[];
-  team_id?: number;
-  org_id?: number;
-}
-
-interface UserAccount {
-  user_id: number;
-  org_id: number;
-  team_id: number | null;
-  role_id: number | null;
-  email: string;
-  name: string;
-  timezone: string | null;
-  privacy_settings: Record<string, unknown>;
-  tool_connections: Record<string, unknown>;
-  tracking_enabled: boolean;
-  last_login: string | null;
-  created_at: string;
-}
-
-interface Team {
-  team_id: number;
-  org_id: number;
-  name: string;
-  invite_code: string | null;
-  members: number[] | Record<string, unknown>;
-  manager_id: number | null;
-  created_at: string;
-}
-
 export async function POST(request: NextRequest) {
   try {
     const authContext = await getAuthContext();
@@ -49,7 +10,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = (await request.json()) as OnboardingRequest;
+    const body = await request.json();
     const { roleId, toolIds, teamId, orgId } = body;
 
     if (!roleId) {
@@ -57,7 +18,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Update user profile with onboarding data
-    const updateData: UserUpdateData = {
+    // eslint-disable-next-line
+    const updateData: any = {
       role_id: roleId,
       tool_connections: toolIds || [],
     };
@@ -88,10 +50,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const userData = data as UserAccount;
-
     // If user joined a team, add them to the team's members
-    if (teamId && userData.user_id) {
+    if (teamId && data.user_id) {
       const { data: teamData, error: teamFetchError } = await supabaseAdmin
         .from("team")
         .select("members")
@@ -102,16 +62,14 @@ export async function POST(request: NextRequest) {
         console.error("Error fetching team:", teamFetchError);
         // Don't fail the whole onboarding, just log the error
       } else {
-        const typedTeam = teamData as Pick<Team, "members">;
-
         // Get current members array or initialize empty array
-        const currentMembers = Array.isArray(typedTeam.members)
-          ? (typedTeam.members as number[])
+        const currentMembers = Array.isArray(teamData.members)
+          ? teamData.members
           : [];
 
         // Add user_id if not already in members
-        if (!currentMembers.includes(userData.user_id)) {
-          const updatedMembers = [...currentMembers, userData.user_id];
+        if (!currentMembers.includes(data.user_id)) {
+          const updatedMembers = [...currentMembers, data.user_id];
 
           const { error: teamUpdateError } = await supabaseAdmin
             .from("team")
@@ -126,7 +84,7 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { message: "Onboarding completed successfully", user: userData },
+      { message: "Onboarding completed successfully", user: data },
       { status: 200 },
     );
   } catch (error) {
